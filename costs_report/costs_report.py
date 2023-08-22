@@ -4,17 +4,22 @@ then posted to Slack.
 
 The table looks something like:
 
-    Costs report for September 2021
-
-    account         prev 3 months ($)    last month ($)
-    ------------  -------------------  ----------------  ------  ------
-    candles                  3,600.00          3,960.00          ↟↟ 10%
-    rent                       800.00            801.00
-    food                       200.00            200.00
-    data                       150.00            151.50
-    utility                    150.00            142.60   ↓  5%
-    ------------  -------------------  ----------------  ------  ------
-    TOTAL                    4,900.00          5,255.10          ↟↟  7%
+    account                  prev 3 months av.    last month ($)
+    ---------------------  -------------------  ----------------  ------  ------
+    STEM prod                         1,234.24          1,234.83          ↟↟ 61%
+    STEM staging                      1,234.35          1,234.40   ↓  5%
+    Kano prod operations              1,234.23          1,234.83   ↓ 17%
+    Kano data                           123.33            123.03
+    Kano services sandbox                12.02             12.12          ↟↟  5%
+    STEM communicator dev                12.17             12.90          ↟↟ 16%
+    Kano pc                              20.25              6.93   ↓ 65%
+    Kano sandbox                          1.72              1.72
+    Kano backups                          0.48              0.48
+    Kano os                               0.08              0.08
+    Kano ops admin                        1.13              0.01   ↓ 98%
+    Kano ecommerce                        0.00              0.00   ↓ 75%
+    -------------          -------------------  ----------------  ------  ------
+    TOTAL                            xx,xxx.xx         xx,xxx.xx          ↟↟ 19%
 
 How it works:
 
@@ -42,6 +47,9 @@ import boto3
 import tabulate
 
 
+DEFAULT_ROLE_ARN = 'arn:aws:iam::370771240857:role/kano'
+
+
 def get_aws_session(*, role_arn):
     """
     Get a boto3 Session authenticated with the given role ARN.
@@ -58,7 +66,7 @@ def get_aws_session(*, role_arn):
     )
 
 
-def get_last_four_months_of_bills(*, role_arn):
+def get_last_four_months_of_bills(*, account_id, role_arn=DEFAULT_ROLE_ARN):
     """
     Retrieve the last four months of total costs for the given AWS role.
     """
@@ -90,16 +98,27 @@ def get_last_four_months_of_bills(*, role_arn):
         # all forms of amortised/blended/normalised/unblended costs, and
         # that change is what I care about.
         #
-        Metrics=["UnblendedCost"],
+        # Metrics=["UnblendedCost"],
+        Metrics=["NetAmortizedCost"],
+        Filter={
+            'Dimensions': {
+                'Key': 'LINKED_ACCOUNT',
+                'Values': [
+                    account_id
+                ]
+            }
+        }
     )
 
     result = {}
 
     for entry in resp["ResultsByTime"]:
         start = datetime.datetime.strptime(entry["TimePeriod"]["Start"], "%Y-%m-%d")
-        assert entry["Total"]["UnblendedCost"]["Unit"] == "USD"
+        # assert entry["Total"]["UnblendedCost"]["Unit"] == "USD"
+        assert entry["Total"]["NetAmortizedCost"]["Unit"] == "USD"
         result[(start.year, start.month)] = float(
-            entry["Total"]["UnblendedCost"]["Amount"]
+            # entry["Total"]["UnblendedCost"]["Amount"]
+            entry["Total"]["NetAmortizedCost"]["Amount"]
         )
 
     return result
@@ -250,13 +269,13 @@ def create_billing_table(billing_data):
 
     return tabulate.tabulate(
         rows,
-        headers=["account", "prev 3 months ($)", "last month ($)", "", ""],
+        headers=["account", "prev 3 months av.", "last month ($)", "", ""],
         floatfmt=".2f",
-        colalign=("left", "right", "right", "right"),
+        colalign=("left", "right", "right", "right", "right"),
     )
 
 
-def main(_event, _context):
+def main(_event=None, _context=None):
     billing_data = {}
 
     running_in_lambda = os.environ.get("AWS_EXECUTION_ENV", "").startswith(
@@ -264,30 +283,36 @@ def main(_event, _context):
     )
 
     for account_id, account_name in [
-        ("760097843905", "platform"),
-        ("756629837203", "catalogue"),
-        ("975596993436", "storage"),
-        ("299497370133", "workflow"),
-        ("130871440101", "experience"),
-        ("770700576653", "identity"),
-        ("653428163053", "digirati"),
-        ("964279923020", "data"),
-        ("269807742353", "reporting"),
-        ("404315009621", "digitisation"),
-        ("782179017633", "microsites"),
+        # ("030469704569", "kano-prod"),
+        # ("514333761684", "kano-staging"),
+        # ("490793685774", "kano-artopia"),
+        ("271119165879", "STEM prod"),
+        ("044436578076", "STEM staging"),
+        ("370771240857", "Kano prod operations"),
+        ("214499854237", "Kano data"),
+        ("169316547066", "Kano services sandbox"),
+        ("648433460441", "STEM communicator dev"),
+        ("802610295201", "Kano PC"),
+        ("245070913529", "Kano sandbox"),
+        ("657385723538", "Kano backups"),
+        ("184856031229", "Kano OS"),
+        ("602638832636", "Kano ops/admin"),
+        ("446458378801", "Kano ecommerce"),
     ]:
-        if running_in_lambda:
-            role_arn = (
-                f"arn:aws:iam::{account_id}:role/{account_name}-costs_report_lambda"
-            )
-        else:
-            role_arn = f"arn:aws:iam::{account_id}:role/{account_name}-developer"
+        # if running_in_lambda:
+        #     role_arn = (
+        #         f"arn:aws:iam::{account_id}:role/{account_name}-costs_report_lambda"
+        #     )
+        # else:
+        #     role_arn = f"arn:aws:iam::{account_id}:role/{account_name}-developer"
 
-        billing_data[account_name] = get_last_four_months_of_bills(role_arn=role_arn)
+        # role_arn = f"arn:aws:iam::{account_id}:role/{account_name}"
 
-    billing_data["elastic cloud"] = get_elastic_cloud_bill(
-        date_blocks=billing_data["platform"].keys()
-    )
+        billing_data[account_name] = get_last_four_months_of_bills(account_id=account_id)
+
+    # billing_data["elastic cloud"] = get_elastic_cloud_bill(
+    #     date_blocks=billing_data["platform"].keys()
+    # )
 
     table = create_billing_table(billing_data)
 
@@ -308,10 +333,12 @@ def main(_event, _context):
         ],
     }
 
+    # A Slack hook API key. To be used to post AWS cost reports to the Slack channel, '#aws_cost_reports'
+    # Stored in AWS Secrets Manager. Region is us-west-2
     sess = boto3.Session()
-    webhook_url = get_secret_string(sess, secret_id="slack/wc-platform-hook")
+    webhook_url = get_secret_string(sess, secret_id="slack/aws-costs-report-platform-hook")
 
-    print("Sending message %s" % json.dumps(slack_payload))
+    print("Sending message %s" % json.dumps(slack_payload), flush=True)
 
     req = urllib.request.Request(
         webhook_url,
@@ -323,4 +350,4 @@ def main(_event, _context):
 
 
 if __name__ == "__main__":
-    main(None, None)
+    main()
